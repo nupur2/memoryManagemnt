@@ -25,3 +25,96 @@ Without this flag, the JVM may think it has access to:
 	•	The entire node’s CPU cores (e.g., 32 cores)
 
 Even though your pod is limited to a much smaller slice (like 1.5 GB or 8 GB).
+
+
+Explain JVM memory model (Heap, Metaspace, Stack).
+
+	•	How does G1 GC work? When would you tune GC?
+	•	Difference between OutOfMemoryError: Metaspace vs Heap.
+
+
+	•	How do you debug a memory leak in production?
+jmap -dump:live,format=b,file=heap.hprof <pid> ->“Before dumping, run a Full GC and include only objects that are still reachable (alive).”
+
+1️⃣ Removes noise (MOST IMPORTANT)
+
+Without -live:
+	•	Heap dump contains:
+	•	Dead objects
+	•	Short-lived allocations
+	•	Garbage waiting to be collected
+
+With -live:
+	•	Dump contains only objects preventing memory from being freed
+
+How to debug Metaspace leaks?
+Metaspace leaks are caused by ClassLoaders not being GC’d.
+I monitor Metaspace growth, trace class loading/unloading, analyze ClassLoader references using MAT, 
+identify why the loader is retained, 
+fix the root cause, and validate class unloading instead of increasing Metaspace.”'
+A Metaspace leak happens when classes keep getting loaded but never unloaded because t
+heir ClassLoader is still referenced.
+
+ Check heap dump → multiple ClassLoaders?
+✔ Disable Spring DevTools in prod
+✔ Check redeploy / hot reload
+✔ Check dynamic proxy creation in loops
+✔ Deregister drivers & listeners
+✔ Restart app after fix (Metaspace leaks need restart)
+
+👉 Key difference:
+	•	Heap leak → objects not GC’d
+	•	Metaspace leak → classes not unloaded
+
+1️⃣ Identify Metaspace symptoms
+
+Common signs
+	•	OutOfMemoryError: Metaspace
+	•	Heap looks normal
+	•	GC activity is normal
+	•	Metaspace usage keeps increasing
+
+Confirm via JVM stats
+jstat -gcmetacapacity <pid> 5s
+Look for:
+	•	Increasing MC / MU
+	•	No drop after Full GC
+
+Enable Metaspace observability
+-XX:+TraceClassLoading
+-XX:+TraceClassUnloading
+if you see:
+	•	Lots of class loading
+	•	Little or no class unloading
+
+jmap -dump:live,file=heap.hprof <pid>
+Analyze ClassLoader references, not objects.
+
+6️⃣ Spring / Microservices specific leaks
+
+Typical offenders
+	•	CGLIB proxies created dynamically
+	•	Reloadable contexts
+	•	@Configuration classes reloaded
+	•	Spring Boot fat-jar ClassLoader
+
+Fixes
+	•	Disable DevTools in prod -># disable in prod
+         spring.devtools.restart.enabled=false
+	•	Avoid runtime class generation
+       Proxy.newProxyInstance(...)   // inside request flow
+       or dynamic bytecode generation in loops.
+
+         GOOD pattern
+	     •	Create proxies once at startup
+	     •	Reuse them
+       	 •	Use fixed proxies
+
+   •	Clean up on shutdown
+        bad
+           DriverManager.registerDriver(...)
+        good 
+           @PreDestroy
+           public void cleanup() {
+               DriverManager.deregisterDriver(driver);
+            }
